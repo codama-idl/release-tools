@@ -1,4 +1,4 @@
-name: Sync rulesets
+name: Sync policies
 
 on:
   workflow_dispatch:
@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   sync:
-    name: Apply ruleset.json org-wide
+    name: Apply repo-settings.json and ruleset.json org-wide
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -29,7 +29,7 @@ jobs:
           permission-administration: write
 
       - name: Sync
-        run: node src/tasks/sync-rulesets.mjs
+        run: node src/tasks/sync-policies.mjs
         env:
           ADMIN_TOKEN: ${{ steps.admin-token.outputs.token }}
           ORG: ${{ github.repository_owner }}

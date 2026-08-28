@@ -11,7 +11,7 @@ This repository is intentionally boring: plain ES modules, zero dependencies, no
 | `bin/release-tools.mjs` | The `release-tools postversion` guard, hooked into each repo's changesets `version-script`. Blocks release PRs that cross a major illegally (off `main`, without the `N.x` maintenance branch cut, or breaking the monorepo same-major invariant). |
 | `.github/workflows/cut.yml` | Reusable workflow: starts the next major. Creates `N.x`, enters pre-release mode on `main`, seeds the major changeset, flips the default branch, optionally opens the tracking issue. |
 | `.github/workflows/promote.yml` | Reusable workflow: graduates the release candidate. Points `N.x` at `release-N.x`, exits pre-release mode on `main`, flips the default branch back. |
-| `ruleset.json` + `.github/workflows/sync-rulesets.yml` | Branch protection as code: the canonical policy for `main` and `[0-9]*.x` branches, applied to every repository in the organisation via a dispatchable sync. |
+| `ruleset.json` + `repo-settings.json` + `.github/workflows/sync-policies.yml` | Repository policy as code: the canonical branch protection for `main` and `[0-9]*.x` branches, plus the repository settings (squash-only merges with trailer-preserving default messages, auto-merge, branch deletion), applied to every repository in the organisation via a dispatchable sync. |
 
 ## Adopting in a repository
 
@@ -68,9 +68,9 @@ This repository is intentionally boring: plain ES modules, zero dependencies, no
 
 The workflows expect the repository to follow the conventions of RELEASING.md: a `RELEASE_VERSION: N.x` env in `.github/workflows/main.yml`, a package.json script containing `changeset publish`, and the `RELEASE_APP_CLIENT_ID` / `RELEASE_APP_PRIVATE_KEY` organisation secrets.
 
-## Updating the branch-protection policy
+## Updating the repository policies
 
-Edit `ruleset.json`, merge the PR, then dispatch the **Sync rulesets** workflow (optionally with a comma-separated repository filter). It creates the ruleset where missing and updates it where present, matched by name.
+Edit `ruleset.json` and/or `repo-settings.json`, merge the PR, then dispatch the **Sync policies** workflow (optionally with a comma-separated repository filter). It applies the settings to every repository and creates the ruleset where missing or updates it where present, matched by name.
 
 ## Versioning
 
