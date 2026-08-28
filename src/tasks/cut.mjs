@@ -15,7 +15,7 @@ import { existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { appendJobSummary, githubRequest } from '../github.mjs';
-import { currentBranch, remoteBranches } from '../git.mjs';
+import { git, remoteBranches } from '../git.mjs';
 import { currentEra, replaceInFile, requireEnv, run, setDefaultBranch, setupGitIdentity } from './shared.mjs';
 
 const cwd = process.cwd();
@@ -24,7 +24,10 @@ const contentsToken = requireEnv('CONTENTS_TOKEN');
 const adminToken = requireEnv('ADMIN_TOKEN');
 const appSlug = requireEnv('APP_SLUG');
 
-const branch = currentBranch(cwd);
+// The actual checked-out branch, NOT the dispatch ref: workflow_dispatch
+// runs on the default branch, which during a transition is the maintenance
+// branch — the workflow's checkout pins `main` regardless.
+const branch = git(cwd, 'branch', '--show-current');
 if (branch !== 'main') throw new Error(`The cut must run from main, not "${branch}".`);
 
 const { major, publicPackages } = currentEra(cwd);
