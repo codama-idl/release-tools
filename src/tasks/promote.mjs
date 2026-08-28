@@ -14,6 +14,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { appendJobSummary } from '../github.mjs';
+import { isPrerelease } from '../versions.mjs';
 import { git, remoteBranches } from '../git.mjs';
 import { currentEra, replaceInFile, requireEnv, run, setDefaultBranch, setupGitIdentity } from './shared.mjs';
 
@@ -34,8 +35,11 @@ if (!existsSync(preJsonPath) || JSON.parse(readFileSync(preJsonPath, 'utf8')).mo
     throw new Error('main is not in pre-release mode: nothing to promote (or it was already promoted).');
 }
 
-const { major } = currentEra(cwd);
-const outgoingMajor = major - 1;
+const { major, publicPackages } = currentEra(cwd);
+// main's package.json only carries the next major once a version PR has
+// merged (as a pre-release). Before the first rc lands — including the
+// fast-track path — it still carries the outgoing major itself.
+const outgoingMajor = isPrerelease(publicPackages[0].version) ? major - 1 : major;
 const maintenanceBranch = `${outgoingMajor}.x`;
 if (!remoteBranches(cwd).has(maintenanceBranch)) {
     throw new Error(`Branch ${maintenanceBranch} does not exist: run the cut workflow first.`);
@@ -66,7 +70,8 @@ run(cwd, 'git', 'push', 'origin', maintenanceBranch);
 // 2. Graduate main.
 run(cwd, 'git', 'checkout', 'main');
 run(cwd, 'pnpm', 'exec', 'changeset', 'pre', 'exit');
-run(cwd, 'git', 'commit', '-am', `Exit pre-release mode for the v${major} stable release`);
+const stableMajor = outgoingMajor + 1;
+run(cwd, 'git', 'commit', '-am', `Exit pre-release mode for the v${stableMajor} stable release`);
 run(cwd, 'git', 'push', 'origin', 'main');
 
 // 3. main takes the default-branch role back.
@@ -79,7 +84,7 @@ appendJobSummary(`## 🚀 Promote complete
 
 Remaining (human) steps:
 
-1. Review and merge the release PR on \`main\`: the stable v${major} publishes and **takes \`latest\` at publish time**.
+1. Review and merge the release PR on \`main\`: the stable v${stableMajor} publishes and **takes \`latest\` at publish time**.
 2. Audit for unported commits: \`git log --oneline main..${maintenanceBranch}\` (each is forward-ported or recorded as dropped in the tracking issue).
 3. Post the closing announcement and close the tracking issue.
 
