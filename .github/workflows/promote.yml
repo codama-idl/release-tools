@@ -11,13 +11,6 @@ jobs:
     name: Promote the release candidate
     runs-on: ubuntu-latest
     steps:
-      - name: Locate release-tools
-        id: tools
-        run: |
-          ref='${{ github.job_workflow_ref }}'
-          echo "repository=$(echo "$ref" | cut -d/ -f1,2)" >> "$GITHUB_OUTPUT"
-          echo "ref=${ref##*@}" >> "$GITHUB_OUTPUT"
-
       - name: Create contents token
         id: contents-token
         uses: actions/create-github-app-token@v3
@@ -44,8 +37,11 @@ jobs:
       - name: Checkout release-tools
         uses: actions/checkout@v7
         with:
-          repository: ${{ steps.tools.outputs.repository }}
-          ref: ${{ steps.tools.outputs.ref }}
+          repository: codama-idl/release-tools
+          # The exact commit of this reusable workflow file, so callers pinning
+          # a tag get the matching scripts. (github.job_workflow_ref is an OIDC
+          # claim only; job_workflow_sha is the context property.)
+          ref: ${{ github.job_workflow_sha }}
           path: .release-tools
 
       - name: Set up pnpm
