@@ -11,7 +11,7 @@
  * OPEN_TRACKING_ISSUE ('true'/'false'), SEED_SUMMARY (optional),
  * TRACKING_TOKEN (required when OPEN_TRACKING_ISSUE is 'true').
  */
-import { writeFileSync } from 'node:fs';
+import { existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { appendJobSummary, githubRequest } from '../github.mjs';
@@ -30,20 +30,26 @@ if (branch !== 'main') throw new Error(`The cut must run from main, not "${branc
 const { major, publicPackages } = currentEra(cwd);
 const nextMajor = major + 1;
 const maintenanceBranch = `${major}.x`;
-if (remoteBranches(cwd).has(maintenanceBranch)) {
-    throw new Error(`Branch ${maintenanceBranch} already exists: this major has already been cut.`);
+const maintenanceExists = remoteBranches(cwd).has(maintenanceBranch);
+const preModeActive = existsSync(join(cwd, '.changeset/pre.json'));
+if (maintenanceExists && preModeActive) {
+    throw new Error(`Branch ${maintenanceBranch} exists and main is in pre-release mode: this major is already cut.`);
 }
 
 await setupGitIdentity(cwd, contentsToken, appSlug);
 
 // 1. The maintenance branch, with its single birth adjustment.
-run(cwd, 'git', 'checkout', '-b', maintenanceBranch);
-replaceInFile(join(cwd, '.changeset/config.json'), '"baseBranch": "main"', `"baseBranch": "${maintenanceBranch}"`);
-run(cwd, 'git', 'commit', '-am', `Cut the ${maintenanceBranch} maintenance branch`);
-run(cwd, 'git', 'push', 'origin', maintenanceBranch);
+if (maintenanceExists) {
+    console.warn(`⚠️ Branch ${maintenanceBranch} already exists: resuming a partially completed cut.`);
+} else {
+    run(cwd, 'git', 'checkout', '-b', maintenanceBranch);
+    replaceInFile(join(cwd, '.changeset/config.json'), '"baseBranch": "main"', `"baseBranch": "${maintenanceBranch}"`);
+    run(cwd, 'git', 'commit', '-am', `Cut the ${maintenanceBranch} maintenance branch`);
+    run(cwd, 'git', 'push', 'origin', maintenanceBranch);
+    run(cwd, 'git', 'checkout', 'main');
+}
 
 // 2. Start the next major on main.
-run(cwd, 'git', 'checkout', 'main');
 replaceInFile(join(cwd, '.github/workflows/main.yml'), `RELEASE_VERSION: ${major}.x`, `RELEASE_VERSION: ${nextMajor}.x`);
 run(cwd, 'pnpm', 'exec', 'changeset', 'pre', 'enter', 'rc');
 const seedSummary =
