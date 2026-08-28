@@ -5,24 +5,30 @@
  * - On `main`: bumps the release-version env, enters pre-release mode (`rc`),
  *   seeds the major changeset covering all public packages.
  * - Flips the default branch to `N.x`.
- * - Optionally opens the transition tracking issue (driving repos only).
+ * - Optionally opens the transition tracking issue and the announcement
+ *   thread (driving repos only), cross-linked both ways.
  *
  * Environment: CONTENTS_TOKEN, ADMIN_TOKEN, APP_SLUG, GITHUB_REPOSITORY,
- * OPEN_TRACKING_ISSUE ('true'/'false'), SEED_SUMMARY (optional),
- * TRACKING_TOKEN (required when OPEN_TRACKING_ISSUE is 'true').
+ * OPEN_TRACKING_ISSUE ('true'/'false'), ANNOUNCE ('true'/'false'),
+ * SEED_SUMMARY (optional), TRACKING_TOKEN (required for the tracking issue
+ * and the announcement thread; needs `issues: write` / `discussions: write`).
  */
-import { existsSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { appendJobSummary, githubRequest } from '../github.mjs';
+import { appendJobSummary, githubGraphQL, githubRequest } from '../github.mjs';
 import { git, remoteBranches } from '../git.mjs';
 import { currentEra, replaceInFile, requireEnv, run, setDefaultBranch, setupGitIdentity } from './shared.mjs';
+
+const RELEASING = 'https://github.com/codama-idl/spec/blob/HEAD/RELEASING.md';
 
 const cwd = process.cwd();
 const repo = requireEnv('GITHUB_REPOSITORY');
 const contentsToken = requireEnv('CONTENTS_TOKEN');
 const adminToken = requireEnv('ADMIN_TOKEN');
 const appSlug = requireEnv('APP_SLUG');
+const openTrackingIssue = process.env.OPEN_TRACKING_ISSUE === 'true';
+const announce = process.env.ANNOUNCE === 'true';
 
 // The actual checked-out branch, NOT the dispatch ref: workflow_dispatch
 // runs on the default branch, which during a transition is the maintenance
@@ -34,7 +40,8 @@ const { major, publicPackages } = currentEra(cwd);
 const nextMajor = major + 1;
 const maintenanceBranch = `${major}.x`;
 const maintenanceExists = remoteBranches(cwd).has(maintenanceBranch);
-const preModeActive = existsSync(join(cwd, '.changeset/pre.json'));
+const preJsonPath = join(cwd, '.changeset/pre.json');
+const preModeActive = existsSync(preJsonPath) && JSON.parse(readFileSync(preJsonPath, 'utf8')).mode === 'pre';
 if (maintenanceExists && preModeActive) {
     throw new Error(`Branch ${maintenanceBranch} exists and main is in pre-release mode: this major is already cut.`);
 }
@@ -67,26 +74,118 @@ run(cwd, 'git', 'push', 'origin', 'main');
 // 3. The maintenance branch owns latest and the default-branch role for the transition.
 await setDefaultBranch(adminToken, repo, maintenanceBranch);
 
-// 4. Tracking issue, for the repo driving the transition.
-let issueLine = '';
-if (process.env.OPEN_TRACKING_ISSUE === 'true') {
-    const issue = await githubRequest(requireEnv('TRACKING_TOKEN'), 'POST', `/repos/${repo}/issues`, {
+// 4. Tracking issue and announcement thread (driving repos only), cross-linked.
+let issue = null;
+let discussionUrl = null;
+if (openTrackingIssue) {
+    issue = await githubRequest(requireEnv('TRACKING_TOKEN'), 'POST', `/repos/${repo}/issues`, {
         title: `v${nextMajor} transition tracking`,
-        body: trackingIssueBody(nextMajor, maintenanceBranch),
+        body: trackingIssueBody(),
     });
-    issueLine = `\n- Tracking issue: ${issue.html_url}`;
+}
+if (announce) {
+    discussionUrl = await createAnnouncementThread();
+    if (issue) {
+        await githubRequest(requireEnv('TRACKING_TOKEN'), 'PATCH', `/repos/${repo}/issues/${issue.number}`, {
+            body: trackingIssueBody(discussionUrl),
+        });
+    }
 }
 
+const extraLines = [
+    issue ? `\n- Tracking issue: ${issue.html_url}` : '',
+    discussionUrl ? `\n- Announcement thread: ${discussionUrl} (pin it — the API cannot)` : '',
+].join('');
 appendJobSummary(`## ✂️ Cut complete
 
 - \`${maintenanceBranch}\` created (now the default branch, keeps publishing \`latest\`).
-- \`main\` hosts v${nextMajor}: pre-release mode \`rc\`, seeded major changeset for ${publicPackages.length} package(s).${issueLine}
+- \`main\` hosts v${nextMajor}: pre-release mode \`rc\`, seeded major changeset for ${publicPackages.length} package(s).${extraLines}
 
-Next: land v${nextMajor} changes on \`main\`; each merged release PR ships a new \`rc\`. See [RELEASING.md](https://github.com/codama-idl/spec/blob/HEAD/RELEASING.md).`);
+Next: land v${nextMajor} changes on \`main\`; each merged release PR ships a new \`rc\`. See [RELEASING.md](${RELEASING}).`);
 
-function trackingIssueBody(next, maintenance) {
-    const releasing = 'https://github.com/codama-idl/spec/blob/HEAD/RELEASING.md';
-    return `Tracking issue for the **v${next}** major transition, following [RELEASING.md](${releasing}).
+async function createAnnouncementThread() {
+    const token = requireEnv('TRACKING_TOKEN');
+    const [owner, name] = repo.split('/');
+    const data = await githubGraphQL(
+        token,
+        `query ($owner: String!, $name: String!) {
+            repository(owner: $owner, name: $name) {
+                id
+                discussionCategories(first: 25) { nodes { id, slug } }
+            }
+        }`,
+        { owner, name },
+    );
+    const category = data.repository.discussionCategories.nodes.find((node) => node.slug === 'announcements');
+    if (!category) {
+        throw new Error('No "Announcements" discussion category: enable Discussions on the repository first.');
+    }
+    const created = await githubGraphQL(
+        token,
+        `mutation ($repositoryId: ID!, $categoryId: ID!, $title: String!, $body: String!) {
+            createDiscussion(
+                input: { repositoryId: $repositoryId, categoryId: $categoryId, title: $title, body: $body }
+            ) {
+                discussion { url }
+            }
+        }`,
+        {
+            repositoryId: data.repository.id,
+            categoryId: category.id,
+            title: `Codama v${nextMajor} is in development — follow this thread`,
+            body: announcementBody(),
+        },
+    );
+    return created.createDiscussion.discussion.url;
+}
+
+function announcementBody() {
+    const npmExample =
+        publicPackages.length === 1 ? ` (\`npm install ${publicPackages[0].name}@rc\` to try them)` : '';
+    const issueLine = issue ? `- 📋 Tracking issue: ${issue.html_url}\n` : '';
+    return `The **v${nextMajor}** major transition has started 🚀
+
+This thread is the single announcement channel for the whole wave: subscribe to follow it from first release candidate to stable release.
+
+## What this means right now
+
+- \`main\` now hosts the v${nextMajor} work in progress; the stable v${major} line continues on \`${maintenanceBranch}\` and remains what \`npm install\` gives you — **nothing changes for users today**.
+- Release candidates will publish under the \`rc\` dist-tag as work lands${npmExample}.
+
+## What happens next
+
+1. **Candidate declaration** — once v${nextMajor} is feature-complete, we will declare a specific release-candidate set *on this thread* (the post will be updated and a comment posted), together with the earliest promote date. From that moment the branch is frozen except for fixes.
+2. **Validation window** (~six weeks) — integrators (explorers, wallets, indexers, program repos) validate against the candidate and report findings **as comments here**.
+3. **Promote** — the stable v${nextMajor} publishes and takes the \`latest\` dist-tag.
+
+## Links
+
+${issueLine}- 📖 The release process: [RELEASING.md](${RELEASING})
+
+<!-- Declaration template — at declaration time, prepend the block below to this post (filled in) and post it as a comment too, so subscribers are notified. Update the tracking issue's dates table as well.
+
+> [!IMPORTANT]
+> ## 📣 Candidate declared — YYYY-MM-DD
+>
+> The following release-candidate set is the **candidate for v${nextMajor}**. Earliest promote date: **YYYY-MM-DD**. From now until promote, these lines are frozen except for fixes; a breaking fix re-declares the candidate here.
+>
+> | Package | Candidate |
+> | --- | --- |
+> | ... | ... |
+>
+> **Integrators**: please validate against these versions and report results in the comments below — your confirmations gate the promote.
+
+-->`;
+}
+
+function trackingIssueBody(threadUrl) {
+    const declaration = threadUrl
+        ? `Declared on the [announcement thread](${threadUrl}) (body edit + comment). _Not declared yet._`
+        : `_Not declared yet. Open the announcement thread per [RELEASING.md](${RELEASING}#2-candidacy) and declare there._`;
+    const announceItem = threadUrl
+        ? `- [x] Announcement thread opened: ${threadUrl} (pin it manually)`
+        : '- [ ] Open the announcement thread in [Discussions](https://github.com/codama-idl/spec/discussions)';
+    return `Tracking issue for the **v${nextMajor}** major transition, following [RELEASING.md](${RELEASING}).
 
 **Status: 🔵 Candidacy — release candidates shipping, no candidate declared yet.**
 
@@ -99,24 +198,24 @@ function trackingIssueBody(next, maintenance) {
 
 ## Candidate declaration
 
-_None yet. When declared, this section will name the candidate set and the earliest promote date, and link the Discussions announcement._
+${declaration}
 
 <details>
 <summary><strong>Phase checklists</strong></summary>
 
-### Cut ([docs](${releasing}#1-cut))
-- [x] \`${maintenance}\` cut; \`main\` in pre-release mode with the seeded major changeset
+### Cut ([docs](${RELEASING}#1-cut))
+- [x] \`${maintenanceBranch}\` cut; \`main\` in pre-release mode with the seeded major changeset
 - [x] Tracking issue opened
 
-### Candidacy ([docs](${releasing}#2-candidacy))
-- [ ] Declare the candidate set + earliest promote date (comment below)
-- [ ] Announce in [Discussions](https://github.com/codama-idl/spec/discussions)
+### Candidacy ([docs](${RELEASING}#2-candidacy))
+${announceItem}
+- [ ] Declare the candidate set + earliest promote date on the thread
 - [ ] Freeze: fixes only until promote
 
-### Promote ([docs](${releasing}#3-promote))
+### Promote ([docs](${RELEASING}#3-promote))
 - [ ] Dispatch \`promote\`
 - [ ] Merge the release PR — the stable major publishes and takes \`latest\`
-- [ ] Audit \`git log --oneline main..${maintenance}\` (superset guarantee)
+- [ ] Audit \`git log --oneline main..${maintenanceBranch}\` (superset guarantee)
 - [ ] Closing announcement; close this issue
 
 </details>

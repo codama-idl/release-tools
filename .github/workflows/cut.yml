@@ -7,6 +7,10 @@ on:
         description: 'Open a transition tracking issue (the repo driving the transition only)'
         type: boolean
         default: false
+      announce:
+        description: 'Open the announcement thread in Discussions (requires an Announcements category)'
+        type: boolean
+        default: false
       seed-summary:
         description: 'Changelog summary for the seeded major changeset'
         type: string
@@ -15,6 +19,7 @@ on:
 permissions:
   contents: read
   issues: write
+  discussions: write
 
 jobs:
   cut:
@@ -77,4 +82,5 @@ jobs:
           APP_SLUG: ${{ steps.contents-token.outputs.app-slug }}
           TRACKING_TOKEN: ${{ github.token }}
           OPEN_TRACKING_ISSUE: ${{ inputs.tracking-issue }}
+          ANNOUNCE: ${{ inputs.announce }}
           SEED_SUMMARY: ${{ inputs.seed-summary }}
