@@ -10,8 +10,10 @@
  *
  * Environment: CONTENTS_TOKEN, ADMIN_TOKEN, APP_SLUG, GITHUB_REPOSITORY,
  * OPEN_TRACKING_ISSUE ('true'/'false'), ANNOUNCE ('true'/'false'),
- * SEED_SUMMARY (optional), TRACKING_TOKEN (required for the tracking issue
- * and the announcement thread; needs `issues: write` / `discussions: write`).
+ * SEED_SUMMARY (optional), TRACKING_TOKEN (tracking issue; `issues: write`),
+ * DISCUSSIONS_TOKEN (announcement thread; app token with Discussions write —
+ * the thread lives in the announcement hub, which is usually another repo),
+ * ANNOUNCE_HUB (optional; defaults to the ecosystem hub, codama-idl/spec).
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -29,6 +31,8 @@ const adminToken = requireEnv('ADMIN_TOKEN');
 const appSlug = requireEnv('APP_SLUG');
 const openTrackingIssue = process.env.OPEN_TRACKING_ISSUE === 'true';
 const announce = process.env.ANNOUNCE === 'true';
+const hub = process.env.ANNOUNCE_HUB || 'codama-idl/spec';
+const isHub = repo === hub;
 
 // The actual checked-out branch, NOT the dispatch ref: workflow_dispatch
 // runs on the default branch, which during a transition is the maintenance
@@ -104,8 +108,8 @@ appendJobSummary(`## ✂️ Cut complete
 Next: land v${nextMajor} changes on \`main\`; each merged release PR ships a new \`rc\`. See [RELEASING.md](${RELEASING}).`);
 
 async function createAnnouncementThread() {
-    const token = requireEnv('TRACKING_TOKEN');
-    const [owner, name] = repo.split('/');
+    const token = requireEnv('DISCUSSIONS_TOKEN');
+    const [owner, name] = hub.split('/');
     const data = await githubGraphQL(
         token,
         `query ($owner: String!, $name: String!) {
@@ -118,7 +122,7 @@ async function createAnnouncementThread() {
     );
     const category = data.repository.discussionCategories.nodes.find((node) => node.slug === 'announcements');
     if (!category) {
-        throw new Error('No "Announcements" discussion category: enable Discussions on the repository first.');
+        throw new Error(`No "Announcements" discussion category on ${hub}: enable Discussions there first.`);
     }
     const created = await githubGraphQL(
         token,
@@ -132,7 +136,9 @@ async function createAnnouncementThread() {
         {
             repositoryId: data.repository.id,
             categoryId: category.id,
-            title: `Codama v${nextMajor} is in development — follow this thread`,
+            title: isHub
+                ? `Codama v${nextMajor} is in development — follow this thread`
+                : `\`${repo.split('/')[1]}\` v${nextMajor} is in development — follow this thread`,
             body: announcementBody(),
         },
     );
@@ -143,13 +149,22 @@ function announcementBody() {
     const npmExample =
         publicPackages.length === 1 ? ` (\`npm install ${publicPackages[0].name}@rc\` to try them)` : '';
     const issueLine = issue ? `- 📋 Tracking issue: ${issue.html_url}\n` : '';
-    return `The **v${nextMajor}** major transition has started 🚀
+    const opening = isHub
+        ? `The **v${nextMajor}** major transition has started 🚀
 
 This thread is the single announcement channel for the whole wave: subscribe to follow it from first release candidate to stable release.
 
 ## What this means right now
 
-- \`main\` now hosts the v${nextMajor} work in progress; the stable v${major} line continues on \`${maintenanceBranch}\` and remains what \`npm install\` gives you — **nothing changes for users today**.
+- \`main\` now hosts the v${nextMajor} work in progress; the stable v${major} line continues on \`${maintenanceBranch}\` and remains what \`npm install\` gives you — **nothing changes for users today**.`
+        : `The **v${nextMajor}** major transition of [\`${repo}\`](https://github.com/${repo}) has started 🚀
+
+This thread is the single announcement channel for this transition: subscribe to follow it from first release candidate to stable release.
+
+## What this means right now
+
+- \`main\` of that repository now hosts the v${nextMajor} work in progress; the stable v${major} line continues on its \`${maintenanceBranch}\` branch and remains what \`npm install\` gives you — **nothing changes for users today**.`;
+    return `${opening}
 - Release candidates will publish under the \`rc\` dist-tag as work lands${npmExample}.
 
 ## What happens next
@@ -184,7 +199,7 @@ function trackingIssueBody(threadUrl) {
         : `_Not declared yet. Open the announcement thread per [RELEASING.md](${RELEASING}#2-candidacy) and declare there._`;
     const announceItem = threadUrl
         ? `- [x] Announcement thread opened: ${threadUrl} (pin it manually)`
-        : '- [ ] Open the announcement thread in [Discussions](https://github.com/codama-idl/spec/discussions)';
+        : `- [ ] Open the announcement thread in [the hub's Discussions](https://github.com/${hub}/discussions)`;
     return `Tracking issue for the **v${nextMajor}** major transition, following [RELEASING.md](${RELEASING}).
 
 **Status: 🔵 Candidacy — release candidates shipping, no candidate declared yet.**

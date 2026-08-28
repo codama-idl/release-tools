@@ -8,9 +8,13 @@ on:
         type: boolean
         default: false
       announce:
-        description: 'Open the announcement thread in Discussions (requires an Announcements category)'
+        description: 'Open the announcement thread in the ecosystem hub Discussions'
         type: boolean
         default: false
+      announce-hub:
+        description: 'Repository hosting the announcement Discussions'
+        type: string
+        default: 'codama-idl/spec'
       seed-summary:
         description: 'Changelog summary for the seeded major changeset'
         type: string
@@ -44,6 +48,18 @@ jobs:
           client-id: ${{ secrets.RELEASE_APP_CLIENT_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
           permission-administration: write
+
+      - name: Create discussions token
+        if: ${{ inputs.announce }}
+        id: discussions-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          # Org-wide: the announcement thread lives in the hub repository,
+          # which is usually not the repository being cut.
+          owner: ${{ github.repository_owner }}
+          permission-discussions: write
 
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -83,4 +99,6 @@ jobs:
           TRACKING_TOKEN: ${{ github.token }}
           OPEN_TRACKING_ISSUE: ${{ inputs.tracking-issue }}
           ANNOUNCE: ${{ inputs.announce }}
+          ANNOUNCE_HUB: ${{ inputs.announce-hub }}
+          DISCUSSIONS_TOKEN: ${{ steps.discussions-token.outputs.token }}
           SEED_SUMMARY: ${{ inputs.seed-summary }}
