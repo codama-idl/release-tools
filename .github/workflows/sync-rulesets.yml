@@ -1,0 +1,36 @@
+name: Sync rulesets
+
+on:
+  workflow_dispatch:
+    inputs:
+      repos:
+        description: 'Comma-separated repository names (default: every non-archived repo in the org)'
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    name: Apply ruleset.json org-wide
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Create administration token
+        id: admin-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-administration: write
+
+      - name: Sync
+        run: node src/tasks/sync-rulesets.mjs
+        env:
+          ADMIN_TOKEN: ${{ steps.admin-token.outputs.token }}
+          ORG: ${{ github.repository_owner }}
+          REPOS: ${{ inputs.repos }}

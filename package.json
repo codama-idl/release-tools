@@ -1,0 +1,21 @@
+{
+    "name": "@codama/release-tools",
+    "version": "1.0.0",
+    "description": "Shared release automation for the Codama ecosystem. See RELEASING.md in the spec repository for the process it implements.",
+    "type": "module",
+    "bin": {
+        "release-tools": "./bin/release-tools.mjs"
+    },
+    "files": ["bin", "src"],
+    "engines": {
+        "node": ">=20"
+    },
+    "scripts": {
+        "test": "node --test"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/codama-idl/release-tools.git"
+    },
+    "license": "MIT"
+}

@@ -1,0 +1,81 @@
+name: Cut
+
+on:
+  workflow_call:
+    inputs:
+      tracking-issue:
+        description: 'Open a transition tracking issue (the repo driving the transition only)'
+        type: boolean
+        default: false
+      seed-summary:
+        description: 'Changelog summary for the seeded major changeset'
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  cut:
+    name: Cut the next major
+    runs-on: ubuntu-latest
+    steps:
+      - name: Locate release-tools
+        id: tools
+        run: |
+          ref='${{ github.job_workflow_ref }}'
+          echo "repository=$(echo "$ref" | cut -d/ -f1,2)" >> "$GITHUB_OUTPUT"
+          echo "ref=${ref##*@}" >> "$GITHUB_OUTPUT"
+
+      - name: Create contents token
+        id: contents-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+
+      - name: Create administration token
+        id: admin-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-administration: write
+
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ steps.contents-token.outputs.token }}
+
+      - name: Checkout release-tools
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ steps.tools.outputs.repository }}
+          ref: ${{ steps.tools.outputs.ref }}
+          path: .release-tools
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Cut
+        run: node .release-tools/src/tasks/cut.mjs
+        env:
+          CONTENTS_TOKEN: ${{ steps.contents-token.outputs.token }}
+          ADMIN_TOKEN: ${{ steps.admin-token.outputs.token }}
+          APP_SLUG: ${{ steps.contents-token.outputs.app-slug }}
+          TRACKING_TOKEN: ${{ github.token }}
+          OPEN_TRACKING_ISSUE: ${{ inputs.tracking-issue }}
+          SEED_SUMMARY: ${{ inputs.seed-summary }}
