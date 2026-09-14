@@ -15,62 +15,145 @@ import { isAtLeast } from './versions.mjs';
 /** The npm CLI version that introduced `npm trust`. */
 export const MIN_NPM_VERSION = '11.15.0';
 
-/** Parses a GitHub remote URL (ssh or https) into `owner/repo`, or `null`. */
-export function parseGitHubRepo(url) {
-    if (typeof url !== 'string') return null;
-    const match = /github\.com[/:]([^/]+)\/([^/]+?)(?:\.git)?\/?$/.exec(url.trim());
-    return match ? `${match[1]}/${match[2]}` : null;
+/** The `npm trust` permission that allows a plain `npm publish` (as opposed to `npm stage publish`). */
+const PUBLISH_PERMISSION = 'createPackage';
+
+/**
+ * Parses a GitHub repository reference into `owner/repo`, or `null`: ssh and
+ * https remote URLs, plus the package.json shorthands npm itself normalises
+ * (`github:owner/repo`, bare `owner/repo`).
+ */
+export function parseGitHubRepo(reference) {
+    if (typeof reference !== 'string') return null;
+    const value = reference.trim();
+    const shorthand = /^(?:github:)?([\w.-]+)\/([\w.-]+?)(?:\.git)?$/.exec(value);
+    if (shorthand) return `${shorthand[1]}/${shorthand[2]}`;
+    const url = /github\.com[/:]([^/]+)\/([^/]+?)(?:\.git)?\/?$/.exec(value);
+    return url ? `${url[1]}/${url[2]}` : null;
 }
 
 /**
- * Interprets the output of `npm trust list --json`: `true` when at least one
- * trust relationship exists. Throws on output it cannot interpret rather
- * than guessing (guessing "not trusted" would create a duplicate; guessing
- * "trusted" would silently leave a package unconfigured).
+ * Parses the output of `npm trust list --json`: nothing when the package has
+ * no trust configuration, otherwise one pretty-printed JSON object per
+ * configuration, concatenated (not an array). Throws on anything else
+ * rather than guessing: guessing "none" would create a duplicate, guessing
+ * "configured" would silently leave a package unpublishable.
+ *
+ * @returns {Array<{id?: string, type?: string, file?: string, repository?: string, environment?: string, permissions?: string[]}>}
  */
-export function hasTrustRelationship(json) {
-    let parsed;
-    try {
-        parsed = JSON.parse(json);
-    } catch {
-        throw new Error(`Unexpected \`npm trust list --json\` output: ${JSON.stringify(json).slice(0, 200)}`);
+export function parseTrustList(stdout) {
+    const text = stdout.trim();
+    if (text === '') return [];
+    const configs = [];
+    for (const chunk of splitJsonObjects(text)) {
+        let parsed;
+        try {
+            parsed = JSON.parse(chunk);
+        } catch {
+            throw new Error(`Unexpected \`npm trust list --json\` output: ${JSON.stringify(chunk).slice(0, 200)}`);
+        }
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+            throw new Error(`Unexpected \`npm trust list --json\` shape: ${JSON.stringify(chunk).slice(0, 200)}`);
+        }
+        configs.push(parsed);
     }
-    if (Array.isArray(parsed)) return parsed.length > 0;
-    if (parsed && typeof parsed === 'object') {
-        if (typeof parsed.id === 'string') return true;
-        return Object.values(parsed).some((value) => Array.isArray(value) && value.length > 0);
+    return configs;
+}
+
+/**
+ * Splits concatenated top-level JSON objects, respecting strings. When the
+ * text is anything other than whitespace-separated objects, the whole text
+ * is returned as a single chunk so `JSON.parse` fails loudly on it.
+ */
+function splitJsonObjects(text) {
+    const chunks = [];
+    let depth = 0;
+    let start = -1;
+    let inString = false;
+    for (let i = 0; i < text.length; i++) {
+        const char = text[i];
+        if (inString) {
+            if (char === '\\') i++;
+            else if (char === '"') inString = false;
+        } else if (char === '"') {
+            inString = true;
+        } else if (char === '{') {
+            if (depth === 0) start = i;
+            depth++;
+        } else if (char === '}') {
+            depth--;
+            if (depth === 0 && start !== -1) {
+                chunks.push(text.slice(start, i + 1));
+                start = -1;
+            }
+        }
     }
-    throw new Error(`Unexpected \`npm trust list --json\` shape: ${typeof parsed}`);
+    const wellFormed = depth === 0 && !inString && chunks.join('') === text.replace(/(?<=^|})\s+(?=\{|$)/g, '');
+    return wellFormed ? chunks : [text];
+}
+
+/**
+ * Whether an existing configuration is exactly the one this repository needs:
+ * GitHub Actions, this repository, this workflow file, no environment, and
+ * a plain `npm publish` allowed. Configurations predating permissions
+ * (before May 2026) implicitly allow publishing.
+ */
+export function matchesExpected(config, { repo, file }) {
+    return (
+        (config.type ?? 'github') === 'github' &&
+        typeof config.repository === 'string' &&
+        config.repository.toLowerCase() === repo.toLowerCase() &&
+        config.file === file &&
+        !config.environment &&
+        (!Array.isArray(config.permissions) || config.permissions.includes(PUBLISH_PERMISSION))
+    );
 }
 
 /**
  * Decides what to do for each package. Pure: `registry` answers the two
  * questions the plan depends on. Statuses:
- * - `private`   skipped, never published
- * - `mismatch`  package.json repository does not point at this repo (OIDC would reject the publish)
- * - `missing`   not on the registry yet: trusted publishing cannot create packages
- * - `trusted`   a trust relationship already exists
- * - `pending`   needs `npm trust github`
+ * - `private`        skipped, never published
+ * - `mismatch`       package.json repository does not point at this repo (OIDC would reject the publish)
+ * - `missing`        not on the registry yet: trusted publishing cannot create packages
+ * - `trusted`        the expected trust configuration exists (`detail` lists any extra configurations)
+ * - `misconfigured`  trust configuration(s) exist but none is the expected one (`detail` lists them)
+ * - `pending`        no trust configuration yet: needs `npm trust github`
  *
  * @param {object} input
  * @param {Array<{name: string, private: boolean, repository: string | null}>} input.packages
  * @param {string} input.repo `owner/repo`
- * @param {{ exists(name: string): boolean, isTrusted(name: string): boolean }} input.registry
+ * @param {string} input.file workflow filename, e.g. `main.yml`
+ * @param {{ exists(name: string): boolean, trustConfigurations(name: string): object[] }} input.registry
  */
-export function planTrust({ packages, repo, registry }) {
+export function planTrust({ packages, repo, file, registry }) {
     return packages.map((pkg) => {
         if (pkg.private) return { name: pkg.name, status: 'private' };
         const declared = parseGitHubRepo(pkg.repository);
-        if (declared !== repo) {
+        if (declared?.toLowerCase() !== repo.toLowerCase()) {
             return { name: pkg.name, status: 'mismatch', detail: pkg.repository ?? '(no repository field)' };
         }
         if (!registry.exists(pkg.name)) return { name: pkg.name, status: 'missing' };
-        if (registry.isTrusted(pkg.name)) return { name: pkg.name, status: 'trusted' };
-        return { name: pkg.name, status: 'pending' };
+        const configs = registry.trustConfigurations(pkg.name);
+        if (configs.length === 0) return { name: pkg.name, status: 'pending' };
+        const others = configs.filter((config) => !matchesExpected(config, { repo, file }));
+        if (others.length === configs.length) return { name: pkg.name, status: 'misconfigured', detail: others };
+        return { name: pkg.name, status: 'trusted', detail: others };
     });
 }
 
-/** Tallies a plan and decides the exit code: anything unresolved (`mismatch`, `missing`, `pending`) fails. */
+/** One-line description of a trust configuration, for humans. */
+export function describeConfig(config) {
+    const parts = [
+        config.type ?? 'unknown provider',
+        config.repository ?? '?',
+        config.file ?? '?',
+        config.environment ? `env ${config.environment}` : null,
+        Array.isArray(config.permissions) ? config.permissions.join('+') : 'legacy permissions',
+    ].filter(Boolean);
+    return `${parts.join(' ')} (id ${config.id ?? '?'})`;
+}
+
+/** Tallies a plan and decides the exit code: anything unresolved (`mismatch`, `missing`, `misconfigured`, `pending`) fails. */
 export function summarise(results) {
     const counts = {};
     for (const { status } of results) counts[status] = (counts[status] ?? 0) + 1;
@@ -95,8 +178,8 @@ export const npm = {
             throw error;
         }
     },
-    isTrusted(name) {
-        return hasTrustRelationship(capture(['trust', 'list', name, '--json']));
+    trustConfigurations(name) {
+        return parseTrustList(capture(['trust', 'list', name, '--json']));
     },
     trust(name, { repo, file }) {
         interactive(['trust', 'github', name, '--repo', repo, '--file', file, '--allow-publish', '--yes']);

@@ -36,7 +36,7 @@ jobs:
           client-id: ${{ secrets.RELEASE_APP_CLIENT_ID }}
           private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
           permission-contents: write
-          # The cut edits RELEASE_VERSION in .github/workflows/main.yml, and
+          # The cut edits release-version in .github/workflows/main.yml, and
           # GitHub rejects workflow-file pushes from apps without this.
           permission-workflows: write
 

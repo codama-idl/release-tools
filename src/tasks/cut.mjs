@@ -2,7 +2,7 @@
  * The cut: starts work on the next major. See RELEASING.md §1.
  *
  * - Creates the `N.x` maintenance branch (birth commit: `baseBranch` only).
- * - On `main`: bumps the release-version env, enters pre-release mode (`rc`),
+ * - On `main`: bumps the release line in main.yml, enters pre-release mode (`rc`),
  *   seeds the major changeset covering all public packages.
  * - Flips the default branch to `N.x`.
  * - Optionally opens the transition tracking issue and the announcement

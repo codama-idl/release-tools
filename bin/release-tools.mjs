@@ -4,7 +4,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 
 import { currentBranch, git, remoteBranches, versionAtHead } from '../src/git.mjs';
 import { analyseVersionChanges } from '../src/guard.mjs';
-import { npm, parseGitHubRepo, planTrust, preflight, summarise } from '../src/trust.mjs';
+import { describeConfig, npm, parseGitHubRepo, planTrust, preflight, summarise } from '../src/trust.mjs';
 import { discoverPackages } from '../src/workspace.mjs';
 
 const RELEASING = 'https://github.com/codama-idl/spec/blob/HEAD/RELEASING.md';
@@ -47,8 +47,9 @@ Commands:
                        --dry-run          plan only, change nothing
                        --restrict-tokens  also set "require 2FA and disallow
                                           tokens" on every trusted package
-                     Exits non-zero while any package is unpublished or
-                     misconfigured.
+                     Exits non-zero while any package is unpublished,
+                     misconfigured on npm, or has a package.json repository
+                     that does not point at this repository.
 
 See ${RELEASING} for the process.`);
             break;
@@ -93,10 +94,14 @@ async function trustPublishers(cwd, { file = 'main.yml', dryRun = false, restric
     );
 
     const packages = discoverPackages(cwd);
-    const results = planTrust({ packages, repo, registry: npm });
+    if (packages.length === 0) throw new Error(`No packages found in ${cwd}.`);
+    const results = planTrust({ packages, repo, file, registry: npm });
     const dirOf = Object.fromEntries(packages.map((pkg) => [pkg.name, relative(cwd, pkg.dir) || '.']));
     const width = Math.max(...results.map(({ name }) => name.length));
-    let applied = 0;
+    let calls = 0;
+    const throttle = async () => {
+        if (calls++ > 0) await sleep(2000); // npm's rate-limit guidance for bulk trust calls.
+    };
 
     for (const result of results) {
         const label = result.name.padEnd(width);
@@ -106,6 +111,17 @@ async function trustPublishers(cwd, { file = 'main.yml', dryRun = false, restric
                 break;
             case 'trusted':
                 console.log(`⏭  ${label}  already trusted`);
+                for (const config of result.detail) {
+                    console.log(`⚠️  ${' '.repeat(width)}  extra configuration: ${describeConfig(config)}`);
+                }
+                break;
+            case 'misconfigured':
+                console.log(`❌ ${label}  trusted, but not for ${repo} ${file} with npm publish allowed:`);
+                for (const config of result.detail) {
+                    console.log(
+                        `   ${' '.repeat(width)}  ${describeConfig(config)} — revoke with: npm trust revoke --id ${config.id} ${result.name}`,
+                    );
+                }
                 break;
             case 'mismatch':
                 console.log(
@@ -123,9 +139,8 @@ async function trustPublishers(cwd, { file = 'main.yml', dryRun = false, restric
                     console.log(`🔜 ${label}  would trust ${repo} ${file} (npm publish allowed)`);
                     break;
                 }
-                if (applied > 0) await sleep(2000); // npm's rate-limit guidance for bulk trust calls.
+                await throttle();
                 npm.trust(result.name, { repo, file });
-                applied++;
                 result.status = 'created';
                 console.log(`✅ ${label}  trusted ${repo} ${file} (npm publish allowed)`);
                 break;
@@ -134,6 +149,7 @@ async function trustPublishers(cwd, { file = 'main.yml', dryRun = false, restric
 
     if (restrictTokens && !dryRun) {
         for (const result of results.filter(({ status }) => ['trusted', 'created'].includes(status))) {
+            await throttle();
             npm.restrictTokens(result.name);
             console.log(`🔒 ${result.name.padEnd(width)}  2FA required, tokens disallowed`);
         }

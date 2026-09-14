@@ -1,57 +1,118 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { hasTrustRelationship, parseGitHubRepo, planTrust, preflight, summarise } from '../src/trust.mjs';
+import {
+    describeConfig,
+    matchesExpected,
+    parseGitHubRepo,
+    parseTrustList,
+    planTrust,
+    preflight,
+    summarise,
+} from '../src/trust.mjs';
 
-test('parseGitHubRepo handles ssh, https, .git suffixes and trailing slashes', () => {
-    for (const url of [
+const expected = { repo: 'codama-idl/codama', file: 'main.yml' };
+const good = {
+    id: 'abc',
+    type: 'github',
+    file: 'main.yml',
+    repository: 'codama-idl/codama',
+    permissions: ['createPackage'],
+};
+
+/** `npm trust list --json` prints one pretty-printed object per configuration, concatenated. */
+function npmJsonOutput(...configs) {
+    return configs.map((config) => `\n${JSON.stringify(config, null, 2)}\n`).join('');
+}
+
+test('parseGitHubRepo handles remote URLs and the package.json shorthands npm normalises', () => {
+    for (const reference of [
         'git@github.com:codama-idl/codama.git',
         'https://github.com/codama-idl/codama',
         'https://github.com/codama-idl/codama.git',
         'git+https://github.com/codama-idl/codama.git',
         'ssh://git@github.com/codama-idl/codama.git',
         'https://github.com/codama-idl/codama/',
+        'github:codama-idl/codama',
+        'codama-idl/codama',
     ]) {
-        assert.equal(parseGitHubRepo(url), 'codama-idl/codama', url);
+        assert.equal(parseGitHubRepo(reference), 'codama-idl/codama', reference);
     }
     assert.equal(parseGitHubRepo('https://gitlab.com/a/b'), null);
+    assert.equal(parseGitHubRepo('gitlab:a/b'), null);
     assert.equal(parseGitHubRepo(null), null);
 });
 
-test('hasTrustRelationship reads arrays, wrapped arrays and single objects, and refuses to guess', () => {
-    assert.equal(hasTrustRelationship('[]'), false);
-    assert.equal(hasTrustRelationship('[{"id":"abc","provider":"github"}]'), true);
-    assert.equal(hasTrustRelationship('{"trustedPublishers":[]}'), false);
-    assert.equal(hasTrustRelationship('{"trustedPublishers":[{"id":"abc"}]}'), true);
-    assert.equal(hasTrustRelationship('{"id":"abc","file":"main.yml"}'), true);
-    assert.throws(() => hasTrustRelationship('No trusted publishers configured.'), /Unexpected/);
-    assert.throws(() => hasTrustRelationship('"text"'), /Unexpected/);
+test('parseTrustList reads zero, one and several concatenated configurations', () => {
+    assert.deepEqual(parseTrustList(''), []);
+    assert.deepEqual(parseTrustList('\n\n'), []);
+    assert.deepEqual(parseTrustList(npmJsonOutput(good)), [good]);
+    const other = { ...good, id: 'def', file: 'release.yml', environment: 'npm "prod"' };
+    assert.deepEqual(parseTrustList(npmJsonOutput(good, other)), [good, other]);
 });
 
-test('planTrust classifies every package without touching pending ones', () => {
-    const repo = 'codama-idl/codama';
+test('parseTrustList refuses to guess on anything that is not JSON objects', () => {
+    assert.throws(() => parseTrustList('No trust configurations found for package (x)'), /Unexpected/);
+    assert.throws(() => parseTrustList('[{"id":"abc"}]'), /Unexpected/);
+    assert.throws(() => parseTrustList(`${npmJsonOutput(good)}trailing text`), /Unexpected/);
+    assert.throws(() => parseTrustList('{"id": "abc"'), /Unexpected/);
+});
+
+test('matchesExpected requires this repo, this file, no environment and publish permission', () => {
+    assert.equal(matchesExpected(good, expected), true);
+    assert.equal(matchesExpected({ ...good, repository: 'Codama-IDL/Codama' }, expected), true);
+    assert.equal(matchesExpected({ ...good, permissions: undefined }, expected), true, 'legacy configs allow publish');
+    assert.equal(matchesExpected({ ...good, file: 'release.yml' }, expected), false);
+    assert.equal(matchesExpected({ ...good, repository: 'someone/fork' }, expected), false);
+    assert.equal(matchesExpected({ ...good, environment: 'release' }, expected), false);
+    assert.equal(matchesExpected({ ...good, permissions: ['createStagedPackage'] }, expected), false);
+    assert.equal(matchesExpected({ ...good, type: 'gitlab' }, expected), false);
+});
+
+test('planTrust classifies every package, comparing existing configurations rather than counting them', () => {
+    const stale = { ...good, id: 'old', file: 'publish.yml' };
+    const configsOf = {
+        '@codama/cli': [good],
+        '@codama/nodes': [],
+        '@codama/errors': [stale],
+        '@codama/visitors': [good, stale],
+    };
     const registry = {
         exists: (name) => name !== '@codama/upgrade',
-        isTrusted: (name) => name === '@codama/cli',
+        trustConfigurations: (name) => configsOf[name] ?? [],
     };
+    const repository = 'https://github.com/codama-idl/codama';
     const results = planTrust({
-        repo,
+        ...expected,
         registry,
         packages: [
             { name: '@codama-internal/generators', private: true, repository: null },
-            { name: '@codama/cli', private: false, repository: 'https://github.com/codama-idl/codama' },
-            { name: '@codama/upgrade', private: false, repository: 'https://github.com/codama-idl/codama' },
+            { name: '@codama/cli', private: false, repository },
+            { name: '@codama/upgrade', private: false, repository },
             { name: '@codama/nodes', private: false, repository: 'git+https://github.com/codama-idl/codama.git' },
+            { name: '@codama/errors', private: false, repository },
+            { name: '@codama/visitors', private: false, repository },
             { name: '@codama/stray', private: false, repository: 'https://github.com/someone/fork' },
             { name: '@codama/bare', private: false, repository: null },
         ],
     });
     assert.deepEqual(
         results.map(({ status }) => status),
-        ['private', 'trusted', 'missing', 'pending', 'mismatch', 'mismatch'],
+        ['private', 'trusted', 'missing', 'pending', 'misconfigured', 'trusted', 'mismatch', 'mismatch'],
     );
-    assert.equal(results[4].detail, 'https://github.com/someone/fork');
-    assert.equal(results[5].detail, '(no repository field)');
+    assert.deepEqual(results[1].detail, [], 'exactly the expected configuration');
+    assert.deepEqual(results[4].detail, [stale], 'the offending configuration, for the revoke hint');
+    assert.deepEqual(results[5].detail, [stale], 'extra configuration next to the expected one');
+    assert.equal(results[6].detail, 'https://github.com/someone/fork');
+    assert.equal(results[7].detail, '(no repository field)');
+});
+
+test('describeConfig renders a configuration on one line', () => {
+    assert.equal(describeConfig(good), 'github codama-idl/codama main.yml createPackage (id abc)');
+    assert.equal(
+        describeConfig({ id: 'x', type: 'github', repository: 'a/b', file: 'f.yml', environment: 'prod' }),
+        'github a/b f.yml env prod legacy permissions (id x)',
+    );
 });
 
 test('summarise fails while anything is unresolved and passes once everything is trusted or planned', () => {
@@ -60,7 +121,7 @@ test('summarise fails while anything is unresolved and passes once everything is
         ok: true,
     });
     assert.equal(summarise([{ status: 'trusted' }, { status: 'planned' }]).ok, true);
-    for (const status of ['missing', 'mismatch', 'pending']) {
+    for (const status of ['missing', 'mismatch', 'misconfigured', 'pending']) {
         assert.equal(summarise([{ status: 'trusted' }, { status }]).ok, false, status);
     }
 });

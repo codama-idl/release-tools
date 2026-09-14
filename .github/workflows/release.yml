@@ -86,15 +86,27 @@ jobs:
           # No registry-url on purpose: it would write a token placeholder to
           # .npmrc, and trusted publishing needs no token at all.
 
-      - name: Check npm supports trusted publishing
-        # `pnpm publish` delegates to the npm CLI, which needs 11.5.1+ for OIDC.
+      - name: Check the publisher supports trusted publishing
+        # `changeset publish` runs `pnpm publish`. pnpm 10 delegates that to
+        # the npm CLI (OIDC from npm 11.5.1); pnpm 11+ publishes natively and
+        # does its own OIDC exchange (broken in 11.0.x, fixed in 11.1.3).
         run: |
-          version="$(npm --version)"
-          if [ "$(printf '%s\n' 11.5.1 "$version" | sort -V | head -n1)" != 11.5.1 ]; then
-            echo "::error::npm $version does not support trusted publishing (11.5.1+ required)."
-            exit 1
-          fi
-          echo "npm $version"
+          pnpm_version="$(pnpm --version)"
+          npm_version="$(npm --version)"
+          at_least() { [ "$(printf '%s\n' "$1" "$2" | sort -V | head -n1)" = "$1" ]; }
+          case "$pnpm_version" in
+            [0-9].*|10.*)
+              at_least 11.5.1 "$npm_version" || {
+                echo "::error::npm $npm_version does not support trusted publishing (11.5.1+ required; pnpm $pnpm_version delegates to it)."
+                exit 1
+              } ;;
+            *)
+              at_least 11.1.3 "$pnpm_version" || {
+                echo "::error::pnpm $pnpm_version cannot publish via OIDC (11.1.3+ required)."
+                exit 1
+              } ;;
+          esac
+          echo "pnpm $pnpm_version, npm $npm_version"
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
