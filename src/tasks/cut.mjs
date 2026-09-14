@@ -2,7 +2,7 @@
  * The cut: starts work on the next major. See RELEASING.md §1.
  *
  * - Creates the `N.x` maintenance branch (birth commit: `baseBranch` only).
- * - On `main`: bumps the release-version env, enters pre-release mode (`rc`),
+ * - On `main`: bumps the release line in main.yml, enters pre-release mode (`rc`),
  *   seeds the major changeset covering all public packages.
  * - Flips the default branch to `N.x`.
  * - Optionally opens the transition tracking issue and the announcement
@@ -20,7 +20,7 @@ import { join } from 'node:path';
 
 import { appendJobSummary, githubGraphQL, githubRequest } from '../github.mjs';
 import { git, remoteBranches } from '../git.mjs';
-import { currentEra, replaceInFile, requireEnv, run, setDefaultBranch, setupGitIdentity } from './shared.mjs';
+import { bumpReleaseLine, currentEra, replaceInFile, requireEnv, run, setDefaultBranch, setupGitIdentity } from './shared.mjs';
 
 const RELEASING = 'https://github.com/codama-idl/spec/blob/HEAD/RELEASING.md';
 
@@ -64,7 +64,7 @@ if (maintenanceExists) {
 }
 
 // 2. Start the next major on main.
-replaceInFile(join(cwd, '.github/workflows/main.yml'), `RELEASE_VERSION: ${major}.x`, `RELEASE_VERSION: ${nextMajor}.x`);
+bumpReleaseVersion(join(cwd, '.github/workflows/main.yml'), major, nextMajor);
 run(cwd, 'pnpm', 'exec', 'changeset', 'pre', 'enter', 'rc');
 const seedSummary =
     process.env.SEED_SUMMARY ||
@@ -106,6 +106,11 @@ appendJobSummary(`## ✂️ Cut complete
 - \`main\` hosts v${nextMajor}: pre-release mode \`rc\`, seeded major changeset for ${publicPackages.length} package(s).${extraLines}
 
 Next: land v${nextMajor} changes on \`main\`; each merged release PR ships a new \`rc\`. See [RELEASING.md](${RELEASING}).`);
+
+/** Bumps the release line declared in the caller's main.yml. */
+function bumpReleaseVersion(path, from, to) {
+    writeFileSync(path, bumpReleaseLine(readFileSync(path, 'utf8'), from, to, path));
+}
 
 async function createAnnouncementThread() {
     const token = requireEnv('DISCUSSIONS_TOKEN');

@@ -14,7 +14,7 @@ Thanks for your interest in contributing to Codama's release tooling.
 npm test        # node --test
 ```
 
-Keep the pure logic (`src/guard.mjs`, `src/workspace.mjs`, `src/versions.mjs`) covered by unit tests. The workflow task scripts (`src/tasks/*.mjs`) are thin orchestration over that logic plus git/GitHub calls; test changes to them with a dry run on a sandbox repository before re-tagging.
+Keep the pure logic (`src/guard.mjs`, `src/trust.mjs`, `src/workspace.mjs`, `src/versions.mjs`, `src/tasks/shared.mjs`) covered by unit tests. The workflow task scripts (`src/tasks/*.mjs`) are thin orchestration over that logic plus git/GitHub calls; test changes to them with a dry run on a sandbox repository before re-tagging.
 
 ## Releasing a change
 

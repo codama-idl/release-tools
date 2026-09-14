@@ -13,6 +13,17 @@ export function getMajor(version) {
     return match ? Number(match[1]) : null;
 }
 
+/** Returns `true` when `version` is at least `minimum` (release parts only; pre-release tags ignored). */
+export function isAtLeast(version, minimum) {
+    const a = SEMVER_RE.exec(version);
+    const b = SEMVER_RE.exec(minimum);
+    if (!a || !b) return false;
+    for (let i = 1; i <= 3; i++) {
+        if (Number(a[i]) !== Number(b[i])) return Number(a[i]) > Number(b[i]);
+    }
+    return true;
+}
+
 /** Returns `true` when the version carries a pre-release identifier (e.g. `2.0.0-rc.3`). */
 export function isPrerelease(version) {
     if (typeof version !== 'string') return false;
