@@ -31,7 +31,7 @@ This repository is intentionally boring: plain ES modules, zero dependencies, no
     }
     ```
 
-2. Make the release job of `main.yml` a call to the shared workflow. `release-version` is the branch's release line (the cut bumps it); `pr-title` only exists to keep an already-open release PR attached when adopting:
+2. Make the release job of `main.yml` a call to the shared workflow. `release-version` is the branch's release line (the cut bumps it). Script names, the release PR title (`[N.x] Release package`) and GitHub release creation are conventions baked into the workflow, not inputs; an already-open release PR is simply retitled, since the changesets action matches it by head branch:
 
     ```yaml
     # .github/workflows/main.yml

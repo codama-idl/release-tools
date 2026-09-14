@@ -20,22 +20,6 @@ on:
         description: 'Node.js version (its bundled npm must support trusted publishing)'
         type: string
         default: '24'
-      version-script:
-        description: 'Script run by the changesets action to version packages'
-        type: string
-        default: pnpm release:version
-      publish-script:
-        description: 'Script run by the changesets action to build and publish'
-        type: string
-        default: pnpm release:publish
-      pr-title:
-        description: 'Title of the release PR, prefixed with the release line'
-        type: string
-        default: Release package
-      create-github-releases:
-        description: 'Create a GitHub release per published package'
-        type: boolean
-        default: true
     secrets:
       RELEASE_APP_CLIENT_ID:
         required: true
@@ -116,8 +100,10 @@ jobs:
         uses: changesets/action@v2.1.1
         with:
           github-token: ${{ steps.app-token.outputs.token }}
-          version-script: ${{ inputs.version-script }}
-          publish-script: ${{ inputs.publish-script }}
-          commit-message: '[${{ inputs.release-version }}] ${{ inputs.pr-title }}'
-          pr-title: '[${{ inputs.release-version }}] ${{ inputs.pr-title }}'
-          create-github-releases: ${{ inputs.create-github-releases }}
+          # Convention, not configuration: every Codama repository uses these
+          # script names, this PR title, and creates GitHub releases.
+          version-script: pnpm release:version
+          publish-script: pnpm release:publish
+          commit-message: '[${{ inputs.release-version }}] Release package'
+          pr-title: '[${{ inputs.release-version }}] Release package'
+          create-github-releases: true
