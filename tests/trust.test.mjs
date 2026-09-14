@@ -4,12 +4,14 @@ import { test } from 'node:test';
 import {
     describeConfig,
     isNotFound,
+    isOtpRequired,
     matchesExpected,
     parseGitHubRepo,
     parseTrustList,
     planTrust,
     preflight,
     summarise,
+    withSecondFactor,
 } from '../src/trust.mjs';
 
 const expected = { repo: 'codama-idl/codama', file: 'main.yml' };
@@ -150,4 +152,59 @@ test('preflight rejects old npm and logged-out sessions', () => {
         version: '12.0.2',
         user: 'lorisleiva',
     });
+});
+
+test('isOtpRequired reads EOTP from either stream', () => {
+    assert.equal(isOtpRequired({ stdout: '', stderr: 'npm error code EOTP' }), true);
+    assert.equal(isOtpRequired({ stdout: '{"error":{"code":"EOTP"}}', stderr: '' }), true);
+    assert.equal(isOtpRequired({ stdout: '', stderr: 'npm error code E404' }), false);
+});
+
+test('withSecondFactor authenticates on EOTP and retries exactly once', () => {
+    const otp = Object.assign(new Error('otp'), { stderr: 'npm error code EOTP' });
+    const other = Object.assign(new Error('boom'), { stderr: 'npm error code E500' });
+    const log = [];
+    const authenticate = () => log.push('auth');
+
+    // No OTP needed: no authentication.
+    assert.equal(
+        withSecondFactor(() => 'ok', { authenticate }),
+        'ok',
+    );
+    assert.deepEqual(log, []);
+
+    // OTP needed once: authenticate, retry succeeds.
+    let calls = 0;
+    const flaky = () => {
+        if (calls++ === 0) throw otp;
+        return 'ok';
+    };
+    assert.equal(withSecondFactor(flaky, { authenticate }), 'ok');
+    assert.deepEqual(log, ['auth']);
+
+    // Still OTP after authenticating: loud failure, no infinite loop.
+    assert.throws(
+        () =>
+            withSecondFactor(
+                () => {
+                    throw otp;
+                },
+                { authenticate },
+            ),
+        /still requires a one-time password/,
+    );
+    assert.deepEqual(log, ['auth', 'auth']);
+
+    // Unrelated errors propagate untouched, before and after authenticating.
+    assert.throws(
+        () =>
+            withSecondFactor(
+                () => {
+                    throw other;
+                },
+                { authenticate },
+            ),
+        /boom/,
+    );
+    assert.deepEqual(log, ['auth', 'auth']);
 });

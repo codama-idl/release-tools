@@ -179,7 +179,15 @@ export const npm = {
         }
     },
     trustConfigurations(name) {
-        return parseTrustList(capture(['trust', 'list', name, '--json']));
+        return withSecondFactor(() => parseTrustList(capture(['trust', 'list', name, '--json'])), {
+            authenticate: () => npm.authenticate(name),
+        });
+    },
+    authenticate(name) {
+        console.error(
+            '🔐 npm needs your second factor for trust operations. In the browser, tick "skip 2FA for the next 5 minutes" so the remaining calls run unattended.',
+        );
+        interactive(['trust', 'list', name]);
     },
     trust(name, { repo, file }) {
         interactive(['trust', 'github', name, '--repo', repo, '--file', file, '--allow-publish', '--yes']);
@@ -197,6 +205,35 @@ export const npm = {
  */
 export function isNotFound(error) {
     return /E404/.test(`${error.stdout ?? ''}${error.stderr ?? ''}`);
+}
+
+/** Whether a failed npm call was refused for lack of a one-time password. */
+export function isOtpRequired(error) {
+    return /EOTP/.test(`${error.stdout ?? ''}${error.stderr ?? ''}`);
+}
+
+/**
+ * Runs a captured npm call that may demand a second factor. npm only starts
+ * its browser/OTP flow when stdin AND stdout are terminals, and captured
+ * calls pipe stdout, so on EOTP the interactive `authenticate` runs with the
+ * terminal attached (the user can grant a 5-minute 2FA-free window there)
+ * and the call is retried once.
+ */
+export function withSecondFactor(fn, { authenticate, isOtp = isOtpRequired }) {
+    try {
+        return fn();
+    } catch (error) {
+        if (!isOtp(error)) throw error;
+    }
+    authenticate();
+    try {
+        return fn();
+    } catch (error) {
+        if (!isOtp(error)) throw error;
+        throw new Error(
+            'npm still requires a one-time password after authenticating; rerun and tick "skip 2FA for the next 5 minutes".',
+        );
+    }
 }
 
 /** Fails loudly unless the local npm can run `npm trust` and is logged in. */
