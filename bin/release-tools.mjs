@@ -118,9 +118,10 @@ async function trustPublishers(cwd, { file = 'main.yml', dryRun = false, restric
             case 'misconfigured':
                 console.log(`❌ ${label}  trusted, but not for ${repo} ${file} with npm publish allowed:`);
                 for (const config of result.detail) {
-                    console.log(
-                        `   ${' '.repeat(width)}  ${describeConfig(config)} — revoke with: npm trust revoke --id ${config.id} ${result.name}`,
-                    );
+                    const remedy = config.id
+                        ? `revoke with: npm trust revoke --id ${config.id} ${result.name}`
+                        : `revoke it on npmjs.com (no id reported)`;
+                    console.log(`   ${' '.repeat(width)}  ${describeConfig(config)} — ${remedy}`);
                 }
                 break;
             case 'mismatch':

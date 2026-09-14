@@ -3,6 +3,7 @@ import { test } from 'node:test';
 
 import {
     describeConfig,
+    isNotFound,
     matchesExpected,
     parseGitHubRepo,
     parseTrustList,
@@ -105,6 +106,13 @@ test('planTrust classifies every package, comparing existing configurations rath
     assert.deepEqual(results[5].detail, [stale], 'extra configuration next to the expected one');
     assert.equal(results[6].detail, 'https://github.com/someone/fork');
     assert.equal(results[7].detail, '(no repository field)');
+});
+
+test('isNotFound reads E404 from either stream and nothing else', () => {
+    assert.equal(isNotFound({ stdout: '', stderr: 'npm error code E404\nnpm error 404 Not Found' }), true);
+    assert.equal(isNotFound({ stdout: '{"error":{"code":"E404"}}', stderr: '' }), true);
+    assert.equal(isNotFound({ stdout: '', stderr: 'npm error code E401' }), false);
+    assert.equal(isNotFound({ message: 'E404 in the message only' }), false);
 });
 
 test('describeConfig renders a configuration on one line', () => {

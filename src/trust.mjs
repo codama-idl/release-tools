@@ -174,7 +174,7 @@ export const npm = {
             capture(['view', name, 'version', '--json']);
             return true;
         } catch (error) {
-            if (/E404/.test(String(error.stderr ?? error.message))) return false;
+            if (isNotFound(error)) return false;
             throw error;
         }
     },
@@ -189,6 +189,15 @@ export const npm = {
         interactive(['access', 'set', 'mfa=publish', name]);
     },
 };
+
+/**
+ * Whether a failed npm call was a "package not found". In `--json` mode npm
+ * writes the error object to stdout and the `npm error code E404` log lines
+ * to stderr, so both streams are checked.
+ */
+export function isNotFound(error) {
+    return /E404/.test(`${error.stdout ?? ''}${error.stderr ?? ''}`);
+}
 
 /** Fails loudly unless the local npm can run `npm trust` and is logged in. */
 export function preflight(client = npm) {
