@@ -8,30 +8,57 @@ This repository is intentionally boring: plain ES modules, zero dependencies, no
 
 | Piece | Purpose |
 | ----- | ------- |
-| `bin/release-tools.mjs` | The `release-tools postversion` guard, hooked into each repo's changesets `version-script`. Blocks release PRs that cross a major illegally (off `main`, without the `N.x` maintenance branch cut, or breaking the monorepo same-major invariant). |
-| `.github/workflows/cut.yml` | Reusable workflow: starts the next major. Creates `N.x`, enters pre-release mode on `main`, seeds the major changeset, flips the default branch, optionally opens the tracking issue. |
+| `bin/release-tools.mjs` | `release-tools postversion`: the guard hooked into each repo's changesets `version-script`. Blocks release PRs that cross a major illegally (off `main`, without the `N.x` maintenance branch cut, or breaking the monorepo same-major invariant). `release-tools trust-publishers`: configures npm Trusted Publishing for every public package of a repository, from a maintainer's machine. |
+| `.github/workflows/release.yml` | Reusable workflow: the release job of every repository. Opens or refreshes the changesets release PR and publishes to npm via Trusted Publishing (OIDC) when it merges. No npm token exists anywhere in the organisation. |
+| `.github/workflows/cut.yml` | Reusable workflow: starts the next major. Creates `N.x`, enters pre-release mode on `main`, seeds the major changeset, flips the default branch, optionally opens the tracking issue and the announcement thread. |
 | `.github/workflows/promote.yml` | Reusable workflow: graduates the release candidate. Points `N.x` at `release-N.x`, exits pre-release mode on `main`, flips the default branch back. |
 | `ruleset.json` + `repo-settings.json` + `.github/workflows/sync-policies.yml` | Repository policy as code: the canonical branch protection for `main` and `[0-9]*.x` branches, plus the repository settings (squash-only merges with trailer-preserving default messages, auto-merge, branch deletion), applied to every repository in the organisation via a dispatchable sync. |
 
 ## Adopting in a repository
 
-1. Add the guard as a dev dependency and chain it after `changeset version`:
+1. Add the guard as a dev dependency and chain it after `changeset version`; build inside the publish script (the release workflow only builds when it publishes):
 
     ```jsonc
     // package.json
     {
         "devDependencies": {
-            "@codama/release-tools": "github:codama-idl/release-tools#v1.0.0"
+            "@codama/release-tools": "github:codama-idl/release-tools#v1.3.0"
         },
         "scripts": {
-            "release:version": "changeset version && release-tools postversion"
+            "release:version": "changeset version && release-tools postversion",
+            "release:publish": "pnpm build && changeset publish"
         }
     }
     ```
 
-    And point the changesets action at it: `version-script: pnpm release:version`.
+2. Make the release job of `main.yml` a call to the shared workflow. `release-version` is the branch's release line (the cut bumps it); `pr-title` only exists to keep an already-open release PR attached when adopting:
 
-2. Add the two dispatch wrappers:
+    ```yaml
+    # .github/workflows/main.yml
+    jobs:
+      release:
+        needs: [test]
+        if: github.event_name == 'push'
+        permissions:
+          contents: write
+          pull-requests: write
+          id-token: write # Trusted Publishing: required on the caller too
+        uses: codama-idl/release-tools/.github/workflows/release.yml@v1
+        with:
+          release-version: 1.x
+        secrets: inherit
+    ```
+
+3. Trust the workflow on npm, once per package, from your own machine (npm 11.15+, `npm login`, 2FA; never a token):
+
+    ```sh
+    pnpm exec release-tools trust-publishers                    # plans and applies; idempotent
+    pnpm exec release-tools trust-publishers --restrict-tokens  # afterwards: "require 2FA and disallow tokens"
+    ```
+
+    Trusted publishing cannot create packages: a brand-new package needs one manual `npm publish` from its directory first, after which the task picks it up. npm validates the OIDC token against the *calling* workflow's filename, hence `main.yml`; the task also checks that each `package.json` `repository` points at the repository, which npm requires.
+
+4. Add the two dispatch wrappers:
 
     ```yaml
     # .github/workflows/cut.yml
@@ -66,7 +93,7 @@ This repository is intentionally boring: plain ES modules, zero dependencies, no
         secrets: inherit
     ```
 
-The workflows expect the repository to follow the conventions of RELEASING.md: a `RELEASE_VERSION: N.x` env in `.github/workflows/main.yml`, a package.json script containing `changeset publish`, and the `RELEASE_APP_CLIENT_ID` / `RELEASE_APP_PRIVATE_KEY` organisation secrets.
+The workflows expect the repository to follow the conventions of RELEASING.md: the `release-version: N.x` input in `.github/workflows/main.yml`, a package.json script containing `changeset publish`, and the `RELEASE_APP_CLIENT_ID` / `RELEASE_APP_PRIVATE_KEY` organisation secrets.
 
 ## Updating the repository policies
 

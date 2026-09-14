@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { getMajor, isPrerelease } from '../src/versions.mjs';
+import { getMajor, isAtLeast, isPrerelease } from '../src/versions.mjs';
 
 test('getMajor parses stable and pre-release versions', () => {
     assert.equal(getMajor('1.9.2'), 1);
@@ -22,4 +22,12 @@ test('isPrerelease', () => {
     assert.equal(isPrerelease('2.0.0-rc.0'), true);
     assert.equal(isPrerelease('2.0.0'), false);
     assert.equal(isPrerelease('2.0.0+build'), false);
+});
+
+test('isAtLeast compares release parts and ignores pre-release tags', () => {
+    assert.equal(isAtLeast('11.15.0', '11.15.0'), true);
+    assert.equal(isAtLeast('12.0.2', '11.15.0'), true);
+    assert.equal(isAtLeast('11.6.2', '11.15.0'), false);
+    assert.equal(isAtLeast('11.15.0-pre.1', '11.15.0'), true);
+    assert.equal(isAtLeast('garbage', '1.0.0'), false);
 });

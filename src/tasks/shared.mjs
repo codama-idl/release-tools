@@ -52,6 +52,24 @@ export function replaceInFile(path, search, replacement) {
     writeFileSync(path, content.replace(search, replacement));
 }
 
+/**
+ * Bumps the release line (`N.x`) declared in a main.yml: the `release-version:`
+ * input of the shared release workflow, or the legacy `RELEASE_VERSION:` env
+ * of repositories that still inline their release job. Pure; throws when the
+ * current line is not declared in either form.
+ */
+export function bumpReleaseLine(content, fromMajor, toMajor, path = 'main.yml') {
+    const key = ['release-version', 'RELEASE_VERSION'].find((candidate) =>
+        content.includes(`${candidate}: ${fromMajor}.x`),
+    );
+    if (!key) {
+        throw new Error(
+            `Expected to find "release-version: ${fromMajor}.x" (or the legacy "RELEASE_VERSION: ${fromMajor}.x") in ${path}.`,
+        );
+    }
+    return content.replace(`${key}: ${fromMajor}.x`, `${key}: ${toMajor}.x`);
+}
+
 /** Flips the repository's default branch. */
 export async function setDefaultBranch(adminToken, repo, branch) {
     await githubRequest(adminToken, 'PATCH', `/repos/${repo}`, { default_branch: branch });

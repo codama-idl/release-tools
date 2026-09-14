@@ -1,0 +1,111 @@
+name: Release
+
+# The release job shared by every Codama repository: opens or refreshes the
+# changesets release PR, and publishes to npm when that PR is merged.
+#
+# Publishing authenticates with npm Trusted Publishing (OIDC): no npm token
+# anywhere. npm validates the OIDC claims against the *calling* workflow's
+# filename (main.yml), so each package's trusted publisher points at the
+# calling repository, not at this one. Both caller and callee must grant
+# `id-token: write`.
+
+on:
+  workflow_call:
+    inputs:
+      release-version:
+        description: 'The release line of this branch, e.g. 1.x (maintained by the cut workflow)'
+        type: string
+        required: true
+      node-version:
+        description: 'Node.js version (its bundled npm must support trusted publishing)'
+        type: string
+        default: '24'
+      version-script:
+        description: 'Script run by the changesets action to version packages'
+        type: string
+        default: pnpm release:version
+      publish-script:
+        description: 'Script run by the changesets action to build and publish'
+        type: string
+        default: pnpm release:publish
+      pr-title:
+        description: 'Title of the release PR, prefixed with the release line'
+        type: string
+        default: Release package
+      create-github-releases:
+        description: 'Create a GitHub release per published package'
+        type: boolean
+        default: true
+    secrets:
+      RELEASE_APP_CLIENT_ID:
+        required: true
+      RELEASE_APP_PRIVATE_KEY:
+        required: true
+    outputs:
+      published:
+        description: 'Whether packages were published in this run'
+        value: ${{ jobs.release.outputs.published }}
+
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write
+
+env:
+  # Opts out of Turborepo telemetry among others. See https://consoledonottrack.com/.
+  DO_NOT_TRACK: '1'
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    outputs:
+      published: ${{ steps.changesets.outputs.published }}
+    steps:
+      - name: Create GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: pnpm
+          # No registry-url on purpose: it would write a token placeholder to
+          # .npmrc, and trusted publishing needs no token at all.
+
+      - name: Check npm supports trusted publishing
+        # `pnpm publish` delegates to the npm CLI, which needs 11.5.1+ for OIDC.
+        run: |
+          version="$(npm --version)"
+          if [ "$(printf '%s\n' 11.5.1 "$version" | sort -V | head -n1)" != 11.5.1 ]; then
+            echo "::error::npm $version does not support trusted publishing (11.5.1+ required)."
+            exit 1
+          fi
+          echo "npm $version"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Open release PR or publish
+        id: changesets
+        uses: changesets/action@v2.1.1
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          version-script: ${{ inputs.version-script }}
+          publish-script: ${{ inputs.publish-script }}
+          commit-message: '[${{ inputs.release-version }}] ${{ inputs.pr-title }}'
+          pr-title: '[${{ inputs.release-version }}] ${{ inputs.pr-title }}'
+          create-github-releases: ${{ inputs.create-github-releases }}

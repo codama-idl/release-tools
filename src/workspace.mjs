@@ -9,7 +9,7 @@ import { join } from 'node:path';
  * all the Codama repositories use.
  *
  * @param {string} rootDir
- * @returns {Array<{dir: string, name: string, version: string, private: boolean}>}
+ * @returns {Array<{dir: string, name: string, version: string, private: boolean, repository: string | null}>}
  */
 export function discoverPackages(rootDir) {
     const patterns = readWorkspacePatterns(rootDir);
@@ -85,5 +85,6 @@ function readPackageJson(dir) {
     if (!existsSync(path)) return null;
     const parsed = JSON.parse(readFileSync(path, 'utf8'));
     if (!parsed.name || !parsed.version) return null;
-    return { dir, name: parsed.name, version: parsed.version, private: parsed.private === true };
+    const repository = typeof parsed.repository === 'string' ? parsed.repository : (parsed.repository?.url ?? null);
+    return { dir, name: parsed.name, version: parsed.version, private: parsed.private === true, repository };
 }
