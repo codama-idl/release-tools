@@ -1,6 +1,7 @@
 /**
- * npm Trusted Publishing configuration, as code. See RELEASING.md
- * §Publishing authentication.
+ * npm Trusted Publishing configuration, as code. See the "Publishing
+ * authentication" section of RELEASING.md:
+ * https://github.com/codama-idl/spec/blob/HEAD/RELEASING.md#publishing-authentication
  *
  * `npm trust` is the CLI equivalent of the package settings page on
  * npmjs.com: it runs in a maintainer's own logged-in session (2FA), never
